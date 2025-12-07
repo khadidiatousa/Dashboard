@@ -3,16 +3,10 @@ import requests
 import pandas as pd
 import numpy as np
 import json
-from datetime import datetime, timedelta
-import plotly.graph_objects as go
-import base64
-import plotly.express as px
+from datetime import datetime
 import io
 import time
-import openpyxl
-import csv
-import matplotlib.pyplot as plt
-import seaborn as sns
+
 
 # Configuration de la page
 st.set_page_config(
