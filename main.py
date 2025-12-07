@@ -99,15 +99,7 @@ st.markdown("""
         font-size: 0.8em;
         margin-left: 5px;
     }
-    .shared-badge {
-        background-color: #ffc107;
-        color: #000;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 0.8em;
-        margin-left: 5px;
-    }
-    .org-badge {
+    .all-badge {
         background-color: #17a2b8;
         color: white;
         padding: 2px 8px;
@@ -125,6 +117,23 @@ st.markdown("""
         margin-bottom: 20px;
         border: 1px solid #dee2e6;
     }
+    .search-box {
+        margin-bottom: 20px;
+    }
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+        gap: 20px;
+        margin-top: 20px;
+    }
+    .scrollable-container {
+        max-height: 600px;
+        overflow-y: auto;
+        padding: 10px;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        background-color: #f8f9fa;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,250 +146,85 @@ class DHIS2Client:
         self.session = requests.Session()
         self.session.auth = (username, password)
         self.current_user_id = None
-        self.current_user_org_id = None
-        self.current_user_org_name = None
         self.timeout = 30
 
     def test_connection(self):
-        """Teste la connexion à l'API DHIS2 et récupère les infos utilisateur"""
+        """Teste la connexion à l'API DHIS2"""
         try:
             response = self.session.get(
                 f"{self.base_url}/api/me",
-                params={"fields": "id,name,email,userGroups,organisationUnits[id,name,level]"},
+                params={"fields": "id,name,email,userGroups"},
                 timeout=self.timeout
             )
             if response.status_code == 200:
                 user_info = response.json()
                 self.current_user_id = user_info.get('id')
-
-                # Récupérer l'organisation de l'utilisateur
-                org_units = user_info.get('organisationUnits', [])
-                if org_units:
-                    # Prendre la première unité d'organisation (généralement la principale)
-                    main_org = org_units[0]
-                    self.current_user_org_id = main_org.get('id')
-                    self.current_user_org_name = main_org.get('name')
-
                 return True, user_info
             return False, None
         except Exception as e:
             st.error(f"Erreur de connexion: {str(e)}")
             return False, None
 
-    def get_user_dashboards(self, page=1, page_size=9):
-        """Récupère les dashboards dont l'utilisateur est propriétaire"""
+    def get_all_dashboards_complete(self, search_query=None):
+        """Récupère TOUS les dashboards disponibles en une seule requête"""
         try:
-            response = self.session.get(
-                f"{self.base_url}/api/dashboards",
-                params={
-                    "fields": "*,user[id,name],dashboardItems[*]",
-                    "filter": f"user.id:eq:{self.current_user_id}",
-                    "paging": "true",
-                    "page": page,
-                    "pageSize": page_size
-                },
-                timeout=self.timeout
-            )
+            all_dashboards = []
+            page = 1
+            page_size = 200  # Récupérer un maximum par page
 
-            if response.status_code == 200:
-                data = response.json()
-                dashboards = data.get('dashboards', [])
-
-                # Marquer tous comme propriétaires
-                for dashboard in dashboards:
-                    dashboard['is_owner'] = True
-                    dashboard['dashboard_type'] = 'personal'
-
-                pager = data.get('pager', {})
-                total = pager.get('total', len(dashboards))
-
-                return {
-                    'dashboards': dashboards,
-                    'total': total,
-                    'page': page,
-                    'page_size': page_size,
-                    'total_pages': max(1, (total + page_size - 1) // page_size)
-                }
-
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
-
-        except Exception as e:
-            st.error(f"Erreur lors de la récupération des dashboards utilisateur: {str(e)}")
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
-
-    def get_shared_dashboards(self, page=1, page_size=9):
-        """Récupère les dashboards partagés avec l'utilisateur"""
-        try:
-            # Récupérer tous les dashboards
-            response = self.session.get(
-                f"{self.base_url}/api/dashboards",
-                params={
+            while True:
+                params = {
                     "fields": "*,user[id,name],dashboardItems[*]",
                     "paging": "true",
                     "page": page,
-                    "pageSize": page_size
-                },
-                timeout=self.timeout
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                all_dashboards = data.get('dashboards', [])
-
-                # Filtrer pour garder seulement ceux dont l'utilisateur n'est PAS propriétaire
-                shared_dashboards = []
-                for dashboard in all_dashboards:
-                    dashboard_user = dashboard.get('user', {})
-                    dashboard_user_id = dashboard_user.get('id')
-
-                    if dashboard_user_id != self.current_user_id:
-                        dashboard['is_owner'] = False
-                        dashboard['dashboard_type'] = 'shared'
-                        shared_dashboards.append(dashboard)
-
-                pager = data.get('pager', {})
-                total = pager.get('total', 0)
-
-                # Pour les dashboards partagés, on doit recalculer la pagination
-                return {
-                    'dashboards': shared_dashboards,
-                    'total': len(shared_dashboards),
-                    'page': page,
-                    'page_size': page_size,
-                    'total_pages': max(1, (len(shared_dashboards) + page_size - 1) // page_size)
+                    "pageSize": page_size,
+                    "order": "name:asc"
                 }
 
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
+                # Ajouter la recherche si spécifiée
+                if search_query and search_query.strip():
+                    params["filter"] = f"name:ilike:{search_query}"
 
-        except Exception as e:
-            st.error(f"Erreur lors de la récupération des dashboards partagés: {str(e)}")
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
+                response = self.session.get(
+                    f"{self.base_url}/api/dashboards",
+                    params=params,
+                    timeout=self.timeout
+                )
 
-    def get_organization_dashboards(self, page=1, page_size=9):
-        """Récupère les dashboards de l'organisation de l'utilisateur"""
-        try:
-            if not self.current_user_org_id:
-                return {'dashboards': [], 'total': 0, 'total_pages': 0}
+                if response.status_code == 200:
+                    data = response.json()
+                    dashboards = data.get('dashboards', [])
 
-            # Récupérer tous les dashboards
-            response = self.session.get(
-                f"{self.base_url}/api/dashboards",
-                params={
-                    "fields": "*,user[id,name,organisationUnits[id,name]],dashboardItems[*]",
-                    "paging": "true",
-                    "page": page,
-                    "pageSize": page_size
-                },
-                timeout=self.timeout
-            )
+                    if not dashboards:
+                        break
 
-            if response.status_code == 200:
-                data = response.json()
-                all_dashboards = data.get('dashboards', [])
-
-                # Filtrer les dashboards par organisation
-                org_dashboards = []
-                for dashboard in all_dashboards:
-                    dashboard_user = dashboard.get('user', {})
-
-                    # Vérifier si l'utilisateur a des unités d'organisation
-                    user_org_units = dashboard_user.get('organisationUnits', [])
-
-                    # Vérifier si l'une des unités d'organisation correspond à celle de l'utilisateur
-                    is_org_dashboard = False
-                    for org_unit in user_org_units:
-                        if org_unit.get('id') == self.current_user_org_id:
-                            is_org_dashboard = True
-                            break
-
-                    if is_org_dashboard:
-                        # Vérifier si c'est le propriétaire
+                    # Marquer les dashboards dont l'utilisateur est propriétaire
+                    for dashboard in dashboards:
+                        dashboard_user = dashboard.get('user', {})
                         dashboard_user_id = dashboard_user.get('id')
+
                         if dashboard_user_id == self.current_user_id:
                             dashboard['is_owner'] = True
-                            dashboard['dashboard_type'] = 'personal'
                         else:
                             dashboard['is_owner'] = False
-                            dashboard['dashboard_type'] = 'organization'
 
-                        org_dashboards.append(dashboard)
+                    all_dashboards.extend(dashboards)
 
-                pager = data.get('pager', {})
-                total = pager.get('total', 0)
+                    # Vérifier si c'est la dernière page
+                    pager = data.get('pager', {})
+                    if page >= pager.get('pageCount', 1):
+                        break
 
-                return {
-                    'dashboards': org_dashboards,
-                    'total': len(org_dashboards),
-                    'page': page,
-                    'page_size': page_size,
-                    'total_pages': max(1, (len(org_dashboards) + page_size - 1) // page_size)
-                }
+                    page += 1
+                else:
+                    st.error(f"Erreur API: {response.status_code}")
+                    break
 
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
+            return all_dashboards
 
         except Exception as e:
-            st.error(f"Erreur lors de la récupération des dashboards organisation: {str(e)}")
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
-
-    def get_all_dashboards(self, page=1, page_size=9):
-        """Récupère tous les dashboards accessibles (personnels + partagés + organisation)"""
-        try:
-            # Récupérer tous les dashboards
-            response = self.session.get(
-                f"{self.base_url}/api/dashboards",
-                params={
-                    "fields": "*,user[id,name,organisationUnits[id,name]],dashboardItems[*]",
-                    "paging": "true",
-                    "page": page,
-                    "pageSize": page_size
-                },
-                timeout=self.timeout
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                all_dashboards = data.get('dashboards', [])
-
-                # Marquer les dashboards selon le type
-                for dashboard in all_dashboards:
-                    dashboard_user = dashboard.get('user', {})
-                    dashboard_user_id = dashboard_user.get('id')
-
-                    if dashboard_user_id == self.current_user_id:
-                        dashboard['is_owner'] = True
-                        dashboard['dashboard_type'] = 'personal'
-                    else:
-                        dashboard['is_owner'] = False
-
-                        # Vérifier si c'est un dashboard d'organisation
-                        user_org_units = dashboard_user.get('organisationUnits', [])
-                        is_org_dashboard = False
-                        for org_unit in user_org_units:
-                            if org_unit.get('id') == self.current_user_org_id:
-                                is_org_dashboard = True
-                                break
-
-                        if is_org_dashboard:
-                            dashboard['dashboard_type'] = 'organization'
-                        else:
-                            dashboard['dashboard_type'] = 'shared'
-
-                pager = data.get('pager', {})
-                total = pager.get('total', len(all_dashboards))
-
-                return {
-                    'dashboards': all_dashboards,
-                    'total': total,
-                    'page': page,
-                    'page_size': page_size,
-                    'total_pages': max(1, (total + page_size - 1) // page_size)
-                }
-
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
-
-        except Exception as e:
-            st.error(f"Erreur lors de la récupération de tous les dashboards: {str(e)}")
-            return {'dashboards': [], 'total': 0, 'total_pages': 0}
+            st.error(f"Erreur lors de la récupération des dashboards: {str(e)}")
+            return []
 
     def get_dashboard_details(self, dashboard_id):
         """Récupère les détails d'un dashboard spécifique"""
@@ -388,7 +232,7 @@ class DHIS2Client:
             response = self.session.get(
                 f"{self.base_url}/api/dashboards/{dashboard_id}",
                 params={
-                    "fields": "*,dashboardItems[*,visualization[id,name,type],map[id,name],text,chart[id,name,type]],user[id,name,organisationUnits[id,name]]"
+                    "fields": "*,dashboardItems[*,visualization[id,name,type],map[id,name],text,chart[id,name,type]],user[id,name]"
                 },
                 timeout=self.timeout
             )
@@ -1187,30 +1031,7 @@ def display_export_tab(df, title):
         )
 
 
-def create_pagination(current_page, total_pages, prefix=""):
-    """Crée une pagination simple"""
-    if total_pages <= 1:
-        return
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if current_page > 1:
-            if st.button("◀️ Précédent", key=f"prev_{prefix}", use_container_width=True):
-                st.session_state[f'current_page_{prefix}'] = current_page - 1
-                st.rerun()
-
-    with col2:
-        st.markdown(f"**Page {current_page} / {total_pages}**")
-
-    with col3:
-        if current_page < total_pages:
-            if st.button("Suivant ▶️", key=f"next_{prefix}", use_container_width=True):
-                st.session_state[f'current_page_{prefix}'] = current_page + 1
-                st.rerun()
-
-
-def display_dashboard_card(dashboard, idx, dashboard_type=""):
+def display_dashboard_card(dashboard, idx):
     """Affiche une carte de dashboard"""
     created = dashboard.get('created', '')[:10] if dashboard.get('created') else 'N/A'
     item_count = len(dashboard.get('dashboardItems', []))
@@ -1219,15 +1040,9 @@ def display_dashboard_card(dashboard, idx, dashboard_type=""):
     owner_info = dashboard.get('user', {})
     owner_name = owner_info.get('name', 'Inconnu')
     is_owner = dashboard.get('is_owner', False)
-    dashboard_type_label = dashboard.get('dashboard_type', 'shared')
 
-    # Déterminer le badge en fonction du type
-    if dashboard_type_label == 'personal':
-        badge_html = '<span class="owner-badge">Personnel</span>'
-    elif dashboard_type_label == 'organization':
-        badge_html = '<span class="org-badge">Organisation</span>'
-    else:
-        badge_html = '<span class="shared-badge">Partagé</span>'
+    # Badge selon le propriétaire
+    badge_html = '<span class="owner-badge">Propriétaire</span>' if is_owner else '<span class="all-badge">Public</span>'
 
     st.markdown(f"""
     <div class="dashboard-card">
@@ -1238,14 +1053,13 @@ def display_dashboard_card(dashboard, idx, dashboard_type=""):
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("Ouvrir", key=f"open_{dashboard['id']}_{idx}_{dashboard_type}", use_container_width=True):
+    if st.button("Ouvrir", key=f"open_{dashboard['id']}_{idx}", use_container_width=True):
         with st.spinner("Chargement du dashboard..."):
             details = st.session_state.client.get_dashboard_details(dashboard['id'])
             if details:
                 # Ajouter l'information du propriétaire aux détails
                 details['is_owner'] = is_owner
                 details['owner_info'] = owner_info
-                details['dashboard_type'] = dashboard_type_label
                 st.session_state.current_dashboard = details
                 st.rerun()
 
@@ -1264,14 +1078,11 @@ def display_selected_dashboard():
         # Afficher les informations du propriétaire
         owner_info = dashboard.get('owner_info', {})
         is_owner = dashboard.get('is_owner', False)
-        dashboard_type = dashboard.get('dashboard_type', 'shared')
 
         if is_owner:
-            st.markdown("**👤 Vous êtes le propriétaire (Dashboard Personnel)**")
-        elif dashboard_type == 'organization':
-            st.markdown(f"**👤 Dashboard d'Organisation | Partagé par: {owner_info.get('name', 'Inconnu')}**")
+            st.markdown("**👤 Vous êtes le propriétaire**")
         elif owner_info:
-            st.markdown(f"**👤 Dashboard Partagé | Partagé par: {owner_info.get('name', 'Inconnu')}**")
+            st.markdown(f"**👤 Propriétaire: {owner_info.get('name', 'Inconnu')}**")
 
     with col2:
         st.metric("Éléments", len(dashboard.get('dashboardItems', [])))
@@ -1287,12 +1098,9 @@ def display_selected_dashboard():
         st.markdown("---")
         st.markdown(f"### 📋 Éléments du Dashboard ({len(items)})")
 
-        # Export global (autorisé pour les dashboards personnels et d'organisation)
-        if is_owner or dashboard_type == 'organization':
-            if st.button("📦 Exporter tout le dashboard", type="primary", key="export_all"):
-                export_all_dashboard_data(items, dashboard)
-        else:
-            st.info("⚠️ L'export complet est réservé aux dashboards personnels et d'organisation")
+        # Export global (autorisé pour tous les dashboards)
+        if st.button("📦 Exporter tout le dashboard", type="primary", key="export_all"):
+            export_all_dashboard_data(items, dashboard)
 
         st.markdown("---")
 
@@ -1404,13 +1212,13 @@ def display_welcome_page():
         st.markdown("""
         <div style='text-align: center; padding: 40px;'>
             <h2>Bienvenue sur DHIS2 Dashboard Viewer</h2>
-            <p>Connectez-vous pour visualiser et exporter vos dashboards DHIS2.</p>
+            <p>Connectez-vous pour visualiser et exporter TOUS les dashboards DHIS2 disponibles.</p>
             <div style='margin-top: 30px;'>
                 <h4>🎯 Fonctionnalités principales:</h4>
                 <div style='text-align: left; margin: 20px;'>
-                    <p>✅ <strong>Dashboards personnels:</strong> Visualisez vos propres dashboards</p>
-                    <p>✅ <strong>Dashboards d'organisation:</strong> Accédez aux dashboards de votre organisation</p>
-                    <p>✅ <strong>Dashboards partagés:</strong> Accédez aux dashboards partagés avec vous</p>
+                    <p>✅ <strong>Tous les dashboards:</strong> Accès complet à tous les dashboards disponibles</p>
+                    <p>✅ <strong>Vue complète:</strong> Tous les dashboards affichés en une seule page</p>
+                    <p>✅ <strong>Recherche:</strong> Trouvez rapidement les dashboards par nom</p>
                     <p>✅ <strong>Graphiques interactifs:</strong> Barres, lignes, circulaires, cartes</p>
                     <p>✅ <strong>Analyses statistiques:</strong> Statistiques descriptives, distributions</p>
                     <p>✅ <strong>Export multiple:</strong> Excel, CSV, JSON</p>
@@ -1422,183 +1230,136 @@ def display_welcome_page():
         """, unsafe_allow_html=True)
 
 
-def display_user_dashboards():
-    """Affiche les dashboards de l'utilisateur"""
-    st.markdown("### 🏠 Mes Dashboards (Personnels)")
+def display_all_dashboards():
+    """Affiche TOUS les dashboards disponibles en une seule page"""
+    st.markdown("### 📋 Tous les Dashboards Disponibles")
 
-    if 'user_dashboards_data' not in st.session_state:
-        st.session_state.user_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-        st.session_state.current_page_user = 1
+    # Barre de recherche et statistiques
+    st.markdown('<div class="search-box">', unsafe_allow_html=True)
+    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
 
-    # Récupérer les dashboards si nécessaire
-    if not st.session_state.user_dashboards_data['dashboards']:
-        with st.spinner("Chargement de vos dashboards personnels..."):
-            data = st.session_state.client.get_user_dashboards(
-                page=st.session_state.current_page_user,
-                page_size=st.session_state.page_size
+    with col1:
+        search_query = st.text_input(
+            "🔍 Rechercher un dashboard par nom",
+            placeholder="Entrez le nom du dashboard...",
+            key="dashboard_search"
+        )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Charger tous les dashboards
+    if 'all_dashboards_complete' not in st.session_state:
+        st.session_state.all_dashboards_complete = []
+        st.session_state.last_search_query = ""
+
+    # Vérifier si on doit recharger les données
+    current_search = search_query if search_query else ""
+    if (not st.session_state.all_dashboards_complete or
+            st.session_state.last_search_query != current_search):
+        with st.spinner("Chargement de tous les dashboards..."):
+            dashboards = st.session_state.client.get_all_dashboards_complete(
+                search_query=search_query if search_query else None
             )
-            st.session_state.user_dashboards_data = data
+            st.session_state.all_dashboards_complete = dashboards
+            st.session_state.last_search_query = current_search
 
-    dashboards = st.session_state.user_dashboards_data['dashboards']
-    total = st.session_state.user_dashboards_data['total']
-    total_pages = st.session_state.user_dashboards_data['total_pages']
+    dashboards = st.session_state.all_dashboards_complete
 
     if not dashboards:
-        st.info("Vous n'avez créé aucun dashboard personnel.")
+        if search_query:
+            st.info(f"Aucun dashboard trouvé pour la recherche: '{search_query}'")
+        else:
+            st.info("Aucun dashboard disponible.")
     else:
-        st.markdown(f"**Total: {total} dashboard(s) personnel(s)**")
-
-        # Pagination
-        create_pagination(st.session_state.current_page_user, total_pages, "user")
-        st.markdown("---")
-
-        # Grille de dashboards
-        cols = st.columns(3)
-        for idx, dashboard in enumerate(dashboards):
-            with cols[idx % 3]:
-                display_dashboard_card(dashboard, idx, "user")
-
-        create_pagination(st.session_state.current_page_user, total_pages, "user_bottom")
-
-
-def display_shared_dashboards():
-    """Affiche les dashboards partagés"""
-    st.markdown("### 🤝 Dashboards Partagés")
-
-    if 'shared_dashboards_data' not in st.session_state:
-        st.session_state.shared_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-        st.session_state.current_page_shared = 1
-
-    # Récupérer les dashboards si nécessaire
-    if not st.session_state.shared_dashboards_data['dashboards']:
-        with st.spinner("Chargement des dashboards partagés..."):
-            data = st.session_state.client.get_shared_dashboards(
-                page=st.session_state.current_page_shared,
-                page_size=st.session_state.page_size
-            )
-            st.session_state.shared_dashboards_data = data
-
-    dashboards = st.session_state.shared_dashboards_data['dashboards']
-    total = st.session_state.shared_dashboards_data['total']
-    total_pages = st.session_state.shared_dashboards_data['total_pages']
-
-    if not dashboards:
-        st.info("Aucun dashboard n'a été partagé avec vous.")
-    else:
-        st.markdown(f"**Total: {total} dashboard(s) partagé(s)**")
-
-        # Pagination
-        create_pagination(st.session_state.current_page_shared, total_pages, "shared")
-        st.markdown("---")
-
-        # Grille de dashboards
-        cols = st.columns(3)
-        for idx, dashboard in enumerate(dashboards):
-            with cols[idx % 3]:
-                display_dashboard_card(dashboard, idx, "shared")
-
-        create_pagination(st.session_state.current_page_shared, total_pages, "shared_bottom")
-
-
-def display_organization_dashboards():
-    """Affiche les dashboards de l'organisation"""
-    st.markdown("### 🏢 Dashboards de l'Organisation")
-
-    if 'org_dashboards_data' not in st.session_state:
-        st.session_state.org_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-        st.session_state.current_page_org = 1
-
-    # Récupérer les dashboards si nécessaire
-    if not st.session_state.org_dashboards_data['dashboards']:
-        with st.spinner("Chargement des dashboards de l'organisation..."):
-            data = st.session_state.client.get_organization_dashboards(
-                page=st.session_state.current_page_org,
-                page_size=st.session_state.page_size
-            )
-            st.session_state.org_dashboards_data = data
-
-    dashboards = st.session_state.org_dashboards_data['dashboards']
-    total = st.session_state.org_dashboards_data['total']
-    total_pages = st.session_state.org_dashboards_data['total_pages']
-
-    if not dashboards:
-        st.info("Aucun dashboard disponible dans votre organisation.")
-    else:
-        # Compter les dashboards
-        personal_in_org = sum(1 for d in dashboards if d.get('is_owner'))
-        org_others = len(dashboards) - personal_in_org
+        # Afficher les statistiques
+        owner_count = sum(1 for d in dashboards if d.get('is_owner'))
+        others_count = len(dashboards) - owner_count
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Vos dashboards", personal_in_org)
+            st.metric("Total dashboards", len(dashboards))
         with col2:
-            st.metric("Autres membres", org_others)
+            st.metric("Vos dashboards", owner_count)
         with col3:
-            st.metric("Total", len(dashboards))
+            st.metric("Autres dashboards", others_count)
 
-        # Pagination
-        create_pagination(st.session_state.current_page_org, total_pages, "org")
-        st.markdown("---")
+        if search_query:
+            st.success(f"🔍 {len(dashboards)} dashboard(s) trouvé(s) pour la recherche")
 
-        # Grille de dashboards
+        # Conteneur défilable pour tous les dashboards
+        st.markdown(f'<div class="scrollable-container">', unsafe_allow_html=True)
+
+        # Grille de dashboards avec 3 colonnes
         cols = st.columns(3)
         for idx, dashboard in enumerate(dashboards):
             with cols[idx % 3]:
-                display_dashboard_card(dashboard, idx, "org")
+                display_dashboard_card(dashboard, idx)
 
-        create_pagination(st.session_state.current_page_org, total_pages, "org_bottom")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-
-def display_all_dashboards():
-    """Affiche tous les dashboards"""
-    st.markdown("### 📋 Tous les Dashboards Accessibles")
-
-    if 'all_dashboards_data' not in st.session_state:
-        st.session_state.all_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-        st.session_state.current_page_all = 1
-
-    # Récupérer les dashboards si nécessaire
-    if not st.session_state.all_dashboards_data['dashboards']:
-        with st.spinner("Chargement de tous les dashboards..."):
-            data = st.session_state.client.get_all_dashboards(
-                page=st.session_state.current_page_all,
-                page_size=st.session_state.page_size
-            )
-            st.session_state.all_dashboards_data = data
-
-    dashboards = st.session_state.all_dashboards_data['dashboards']
-    total = st.session_state.all_dashboards_data['total']
-    total_pages = st.session_state.all_dashboards_data['total_pages']
-
-    if not dashboards:
-        st.info("Aucun dashboard disponible.")
-    else:
-        # Compter les dashboards par type
-        personal_count = sum(1 for d in dashboards if d.get('dashboard_type') == 'personal')
-        org_count = sum(1 for d in dashboards if d.get('dashboard_type') == 'organization')
-        shared_count = sum(1 for d in dashboards if d.get('dashboard_type') == 'shared')
-
-        col1, col2, col3, col4 = st.columns(4)
+        # Options d'export global
+        st.markdown("---")
+        col1, col2 = st.columns(2)
         with col1:
-            st.metric("Personnels", personal_count)
+            if st.button("📥 Exporter la liste des dashboards", use_container_width=True):
+                export_dashboards_list(dashboards)
         with col2:
-            st.metric("Organisation", org_count)
-        with col3:
-            st.metric("Partagés", shared_count)
-        with col4:
-            st.metric("Total", len(dashboards))
+            if st.button("🔄 Actualiser tous les dashboards", use_container_width=True):
+                st.session_state.all_dashboards_complete = []
+                st.rerun()
 
-        # Pagination
-        create_pagination(st.session_state.current_page_all, total_pages, "all")
-        st.markdown("---")
 
-        # Grille de dashboards
-        cols = st.columns(3)
-        for idx, dashboard in enumerate(dashboards):
-            with cols[idx % 3]:
-                display_dashboard_card(dashboard, idx, "all")
+def export_dashboards_list(dashboards):
+    """Exporte la liste complète des dashboards"""
+    try:
+        # Créer un DataFrame avec la liste des dashboards
+        data = []
+        for dashboard in dashboards:
+            owner_info = dashboard.get('user', {})
+            data.append({
+                'Nom': dashboard.get('name', ''),
+                'ID': dashboard.get('id', ''),
+                'Propriétaire': owner_info.get('name', ''),
+                'Éléments': len(dashboard.get('dashboardItems', [])),
+                'Créé le': dashboard.get('created', '')[:10] if dashboard.get('created') else '',
+                'Modifié le': dashboard.get('lastUpdated', '')[:10] if dashboard.get('lastUpdated') else '',
+                'Description': dashboard.get('description', '')[:100] + "..." if len(
+                    dashboard.get('description', '')) > 100 else dashboard.get('description', ''),
+                'Votre dashboard': 'Oui' if dashboard.get('is_owner') else 'Non'
+            })
 
-        create_pagination(st.session_state.current_page_all, total_pages, "all_bottom")
+        df = pd.DataFrame(data)
+
+        # Créer le fichier Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Liste des Dashboards', index=False)
+
+            # Ajouter une feuille de statistiques
+            stats_df = pd.DataFrame({
+                'Statistique': ['Total dashboards', 'Vos dashboards', 'Autres dashboards',
+                                'Moyenne éléments/dashboard'],
+                'Valeur': [
+                    len(dashboards),
+                    sum(1 for d in dashboards if d.get('is_owner')),
+                    len(dashboards) - sum(1 for d in dashboards if d.get('is_owner')),
+                    round(np.mean([len(d.get('dashboardItems', [])) for d in dashboards]), 2)
+                ]
+            })
+            stats_df.to_excel(writer, sheet_name='Statistiques', index=False)
+
+        excel_data = output.getvalue()
+
+        # Télécharger
+        st.download_button(
+            label="📥 Télécharger la liste complète",
+            data=excel_data,
+            file_name=f"liste_dashboards_complete_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"download_list_{int(time.time())}"
+        )
+    except Exception as e:
+        st.error(f"Erreur lors de la création du fichier: {str(e)}")
 
 
 def main():
@@ -1614,18 +1375,8 @@ def main():
         st.session_state.current_dashboard = None
     if 'user_info' not in st.session_state:
         st.session_state.user_info = None
-    if 'user_org_info' not in st.session_state:
-        st.session_state.user_org_info = None
-    if 'current_page_user' not in st.session_state:
-        st.session_state.current_page_user = 1
-    if 'current_page_shared' not in st.session_state:
-        st.session_state.current_page_shared = 1
-    if 'current_page_org' not in st.session_state:
-        st.session_state.current_page_org = 1
-    if 'current_page_all' not in st.session_state:
-        st.session_state.current_page_all = 1
-    if 'page_size' not in st.session_state:
-        st.session_state.page_size = 9
+    if 'search_query' not in st.session_state:
+        st.session_state.search_query = ''
 
     # Sidebar
     with st.sidebar:
@@ -1652,26 +1403,12 @@ def main():
                         st.session_state.client = client
                         st.session_state.user_info = user_info
 
-                        # Stocker les infos de l'organisation
-                        if client.current_user_org_name:
-                            st.session_state.user_org_info = {
-                                'id': client.current_user_org_id,
-                                'name': client.current_user_org_name
-                            }
-
                         # Réinitialiser les données
-                        st.session_state.user_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                        st.session_state.shared_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                        st.session_state.org_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                        st.session_state.all_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                        st.session_state.current_page_user = 1
-                        st.session_state.current_page_shared = 1
-                        st.session_state.current_page_org = 1
-                        st.session_state.current_page_all = 1
+                        st.session_state.all_dashboards_complete = []
+                        st.session_state.last_search_query = ''
+                        st.session_state.search_query = ''
 
                         st.success(f"✅ Connecté: {user_info.get('name', username)}")
-                        if client.current_user_org_name:
-                            st.info(f"🏢 Organisation: {client.current_user_org_name}")
                         st.rerun()
                     else:
                         st.error("❌ Échec de connexion")
@@ -1681,11 +1418,7 @@ def main():
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
                 st.session_state.authenticated = False
-                st.session_state.current_page_user = 1
-                st.session_state.current_page_shared = 1
-                st.session_state.current_page_org = 1
-                st.session_state.current_page_all = 1
-                st.session_state.page_size = 9
+                st.session_state.search_query = ''
                 st.rerun()
 
         if st.session_state.authenticated and st.session_state.user_info:
@@ -1694,35 +1427,12 @@ def main():
             st.markdown(f"**👤 {user.get('name')}**")
             st.markdown(f"*{user.get('email', '')}*")
 
-            if st.session_state.user_org_info:
-                st.markdown(f"**🏢 {st.session_state.user_org_info.get('name', '')}**")
-
             st.markdown("---")
 
             # Options
             st.markdown("### ⚙️ Options")
-            new_size = st.selectbox(
-                "Dashboards par page",
-                [6, 9, 12, 15],
-                index=1,
-                key="page_size_select"
-            )
-            if new_size != st.session_state.page_size:
-                st.session_state.page_size = new_size
-                # Réinitialiser les pages
-                st.session_state.current_page_user = 1
-                st.session_state.current_page_shared = 1
-                st.session_state.current_page_org = 1
-                st.session_state.current_page_all = 1
-                # Vider les données pour forcer le rechargement
-                if 'user_dashboards_data' in st.session_state:
-                    st.session_state.user_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                if 'shared_dashboards_data' in st.session_state:
-                    st.session_state.shared_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                if 'org_dashboards_data' in st.session_state:
-                    st.session_state.org_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
-                if 'all_dashboards_data' in st.session_state:
-                    st.session_state.all_dashboards_data = {'dashboards': [], 'total': 0, 'total_pages': 1}
+            if st.button("🔄 Actualiser les dashboards", use_container_width=True):
+                st.session_state.all_dashboards_complete = []
                 st.rerun()
 
     # Contenu principal
@@ -1733,29 +1443,8 @@ def main():
         if st.session_state.current_dashboard:
             display_selected_dashboard()
         else:
-            # Onglets pour différents types de dashboards
-            st.markdown('<div class="filter-section">', unsafe_allow_html=True)
-
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "🏠 Mes Dashboards",
-                "🏢 Organisation",
-                "🤝 Partagés",
-                "📋 Tous"
-            ])
-
-            with tab1:
-                display_user_dashboards()
-
-            with tab2:
-                display_organization_dashboards()
-
-            with tab3:
-                display_shared_dashboards()
-
-            with tab4:
-                display_all_dashboards()
-
-            st.markdown('</div>', unsafe_allow_html=True)
+            # Afficher directement tous les dashboards
+            display_all_dashboards()
 
 
 if __name__ == "__main__":
