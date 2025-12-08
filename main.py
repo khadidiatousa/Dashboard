@@ -1390,7 +1390,7 @@ def display_selected_dashboard():
         return
 
     # En-tête du dashboard
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
 
     with col1:
         owner_info = dashboard.get('owner_info', {})
@@ -1404,10 +1404,15 @@ def display_selected_dashboard():
             st.markdown(f"**📝 Description:** {dashboard.get('description')}")
 
     with col2:
-        if st.button("← Retour à la liste", use_container_width=True):
+        if st.button("📥 Exporter tout", use_container_width=True, help="Exporter tous les éléments du dashboard"):
+            export_all_dashboard_items(dashboard)
+
+    with col3:
+        if st.button("← Retour", use_container_width=True):
             st.session_state.current_dashboard = None
             st.rerun()
 
+    # ... (le reste du code reste inchangé) ...
     # Métriques du dashboard
     items = dashboard.get('dashboardItems', [])
     item_types = dashboard.get('item_types', {})
@@ -1451,21 +1456,423 @@ def display_all_dashboard_items(items):
 
     st.markdown("## 📋 Tous les éléments du dashboard")
 
-    # Filtrer les éléments pour n'afficher que ceux avec des données
-    valid_items = []
+    # Options d'affichage
+    display_mode = st.radio(
+        "Mode d'affichage:",
+        ["📋 Contenu complet", "📊 Analyses seulement", "📁 Données seulement"],
+        horizontal=True
+    )
+
+    # Afficher tous les éléments
     for idx, item in enumerate(items):
         if has_visualizable_data(item):
-            valid_items.append((idx, item))
+            if display_mode == "📋 Contenu complet":
+                display_item_full_content(item, idx)
+                st.markdown("---")
+            elif display_mode == "📊 Analyses seulement":
+                display_dashboard_item_with_transform(item, idx)
+                st.markdown("---")
+            elif display_mode == "📁 Données seulement":
+                display_data_only(item, idx)
+                st.markdown("---")
 
-    if not valid_items:
-        st.info("Aucun élément avec des données visualisables")
+    # Résumé
+    st.markdown(f"**Total d'éléments affichés:** {len(items)}")
+
+
+def display_data_only(item, idx):
+    """Affiche uniquement les données d'un élément"""
+    item_name = get_item_name(item, idx)
+
+    st.markdown(f"### 📊 Données: {item_name}")
+
+    # Récupérer les données
+    data, info, item_type = st.session_state.client.get_item_data(item)
+
+    if not data.empty:
+        st.info(info)
+        display_data_content(data)
+    else:
+        st.warning(f"⚠️ Aucune donnée disponible pour {item_name}")
+
+
+def display_item_full_content(item, idx):
+    """Affiche le contenu complet d'un élément du dashboard"""
+    item_name = get_item_name(item, idx)
+    item_type = get_item_type(item)
+
+    st.markdown(f"### 📋 Élément {idx + 1}: {item_name}")
+
+    # Afficher les informations de base
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(f"**Type:** {get_item_type_icon(item_type)} {item_type}")
+    with col2:
+        st.markdown(f"**ID:** {get_item_id(item)}")
+
+    # Afficher le contenu spécifique selon le type
+    if item_type == "visualization":
+        display_visualization_content(item['visualization'])
+    elif item_type == "chart":
+        display_chart_content(item['chart'])
+    elif item_type == "map":
+        display_map_content(item['map'])
+    elif item_type == "text":
+        display_text_content(item)
+    else:
+        display_other_content(item)
+
+    # Récupérer et afficher les données
+    data, info, data_type = st.session_state.client.get_item_data(item)
+
+    if not data.empty:
+        st.markdown("#### 📊 Données associées")
+        st.info(info)
+
+        # Afficher les données
+        with st.expander("📋 Voir les données", expanded=True):
+            display_data_content(data)
+
+        # Options d'export
+        display_export_options(data, item_name)
+    else:
+        st.warning("Aucune donnée disponible pour cet élément")
+
+
+def get_item_id(item):
+    """Récupère l'ID d'un élément"""
+    if 'visualization' in item and item['visualization']:
+        return item['visualization'].get('id', 'N/A')
+    elif 'chart' in item and item['chart']:
+        return item['chart'].get('id', 'N/A')
+    elif 'map' in item and item['map']:
+        return item['map'].get('id', 'N/A')
+    elif 'text' in item:
+        return "text_" + str(hash(item.get('text', '')))[:8]
+    return 'N/A'
+
+
+def display_visualization_content(viz):
+    """Affiche le contenu d'une visualisation"""
+    st.markdown("#### 📊 Détails de la visualisation")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Nom:** {viz.get('name', 'Non spécifié')}")
+        st.markdown(f"**Type:** {viz.get('type', 'Non spécifié')}")
+        st.markdown(f"**Description:** {viz.get('description', 'Non spécifiée')}")
+
+    with col2:
+        # Afficher les dimensions si disponibles
+        if 'dimensions' in viz:
+            st.markdown("**Dimensions:**")
+            for dim in viz.get('dimensions', []):
+                st.markdown(f"- {dim}")
+
+        # Afficher les filtres si disponibles
+        if 'filters' in viz:
+            st.markdown("**Filtres:**")
+            for filt in viz.get('filters', []):
+                st.markdown(f"- {filt}")
+
+    # Afficher les axes si disponibles
+    if 'axes' in viz:
+        st.markdown("**Configuration des axes:**")
+        for axis_name, axis_config in viz.get('axes', {}).items():
+            st.markdown(f"- **{axis_name}:** {axis_config}")
+
+    # Afficher les séries si disponibles
+    if 'series' in viz:
+        st.markdown("**Séries de données:**")
+        series_data = viz.get('series', [])
+        if isinstance(series_data, list):
+            for i, serie in enumerate(series_data[:5]):  # Limiter à 5 séries
+                st.markdown(f"{i + 1}. {str(serie)[:100]}...")
+            if len(series_data) > 5:
+                st.info(f"... et {len(series_data) - 5} autres séries")
+        else:
+            st.json(series_data)
+
+
+def display_chart_content(chart):
+    """Affiche le contenu d'un graphique"""
+    st.markdown("#### 📈 Détails du graphique")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Nom:** {chart.get('name', 'Non spécifié')}")
+        st.markdown(f"**Type:** {chart.get('type', 'Non spécifié')}")
+        st.markdown(f"**Sous-type:** {chart.get('subtype', 'Non spécifié')}")
+
+    with col2:
+        st.markdown(f"**Titre:** {chart.get('title', 'Non spécifié')}")
+        st.markdown(f"**Sous-titre:** {chart.get('subtitle', 'Non spécifié')}")
+
+    # Afficher la configuration si disponible
+    if 'config' in chart:
+        with st.expander("⚙️ Configuration du graphique"):
+            st.json(chart.get('config', {}))
+
+    # Afficher les séries
+    if 'series' in chart:
+        st.markdown("**Séries:**")
+        series_list = chart.get('series', [])
+        if isinstance(series_list, list):
+            for i, serie in enumerate(series_list[:10]):  # Limiter à 10
+                if isinstance(serie, dict):
+                    st.markdown(f"- **{serie.get('name', f'Série {i + 1}')}**: {serie.get('type', 'N/A')}")
+                else:
+                    st.markdown(f"- {str(serie)[:100]}...")
+
+
+def display_map_content(map_item):
+    """Affiche le contenu d'une carte"""
+    st.markdown("#### 🌍 Détails de la carte")
+
+    st.markdown(f"**Nom:** {map_item.get('name', 'Non spécifié')}")
+    st.markdown(f"**Description:** {map_item.get('description', 'Non spécifiée')}")
+
+    # Afficher les couches si disponibles
+    if 'layers' in map_item:
+        layers = map_item.get('layers', [])
+        st.markdown(f"**Nombre de couches:** {len(layers)}")
+
+        for i, layer in enumerate(layers[:5]):  # Limiter à 5 couches
+            with st.expander(f"Couche {i + 1}: {layer.get('name', 'Sans nom')}"):
+                st.markdown(f"**Type:** {layer.get('type', 'N/A')}")
+                st.markdown(f"**Style:** {layer.get('style', 'N/A')}")
+                if 'config' in layer:
+                    st.markdown("**Configuration:**")
+                    st.json(layer['config'])
+
+
+def display_text_content(item):
+    """Affiche le contenu d'un texte"""
+    st.markdown("#### 📝 Contenu textuel")
+
+    text_content = item.get('text', '')
+
+    # Afficher le texte complet
+    st.markdown("**Texte complet:**")
+    st.markdown(f"""
+    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6;">
+    {text_content}
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Statistiques du texte
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Longueur", f"{len(text_content)} caractères")
+    with col2:
+        st.metric("Mots", f"{len(text_content.split())}")
+    with col3:
+        st.metric("Lignes", f"{len(text_content.splitlines())}")
+    with col4:
+        st.metric("Taille", f"{(len(text_content.encode('utf-8')) / 1024):.2f} KB")
+
+    # Afficher le texte formaté s'il contient du HTML
+    if '<' in text_content and '>' in text_content:
+        with st.expander("📄 Voir le texte formaté (HTML)"):
+            st.markdown(text_content, unsafe_allow_html=True)
+
+    # Extraire et afficher les liens s'il y en a
+    import re
+    links = re.findall(r'https?://\S+', text_content)
+    if links:
+        with st.expander("🔗 Liens détectés"):
+            for link in links:
+                st.markdown(f"- [{link}]({link})")
+
+
+def display_other_content(item):
+    """Affiche le contenu d'autres types d'éléments"""
+    st.markdown("#### 🔧 Contenu de l'élément")
+
+    # Afficher les clés disponibles
+    st.markdown("**Structure de l'élément:**")
+    for key in item.keys():
+        if key not in ['visualization', 'chart', 'map', 'text']:
+            value = item[key]
+            if isinstance(value, (dict, list)):
+                with st.expander(f"📁 {key}"):
+                    st.json(value)
+            else:
+                st.markdown(f"**{key}:** {value}")
+
+    # Afficher l'élément complet en JSON
+    with st.expander("📄 Vue JSON complète"):
+        st.json(item)
+
+
+def display_data_content(data):
+    """Affiche le contenu des données"""
+    # Informations générales
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Lignes", data.shape[0])
+    with col2:
+        st.metric("Colonnes", data.shape[1])
+    with col3:
+        missing = data.isnull().sum().sum()
+        total = data.size
+        st.metric("Valeurs manquantes", f"{missing}/{total}")
+    with col4:
+        numeric_cols = len(data.select_dtypes(include=[np.number]).columns)
+        st.metric("Colonnes numériques", numeric_cols)
+
+    # Aperçu des données
+    st.markdown("**Aperçu des données:**")
+    st.dataframe(data, use_container_width=True)
+
+    # Informations détaillées sur les colonnes
+    with st.expander("📋 Informations sur les colonnes"):
+        col_info = []
+        for col in data.columns:
+            col_info.append({
+                'Colonne': col,
+                'Type': str(data[col].dtype),
+                'Valeurs uniques': data[col].nunique(),
+                'Valeurs manquantes': data[col].isnull().sum(),
+                'Première valeur': str(data[col].iloc[0]) if len(data) > 0 else '',
+                'Dernière valeur': str(data[col].iloc[-1]) if len(data) > 0 else ''
+            })
+        st.dataframe(pd.DataFrame(col_info), use_container_width=True)
+
+    # Statistiques numériques
+    numeric_data = data.select_dtypes(include=[np.number])
+    if not numeric_data.empty:
+        with st.expander("📊 Statistiques numériques"):
+            st.dataframe(numeric_data.describe(), use_container_width=True)
+
+
+def display_export_options(data, item_name):
+    """Affiche les options d'export des données"""
+    st.markdown("#### 📥 Options d'export")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        # Export CSV
+        csv = data.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Télécharger CSV",
+            data=csv,
+            file_name=f"{clean_filename(item_name)}.csv",
+            mime="text/csv"
+        )
+
+    with col2:
+        # Export Excel
+        try:
+            import io
+            from pandas import ExcelWriter
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                data.to_excel(writer, index=False, sheet_name='Données')
+            excel_data = output.getvalue()
+
+            st.download_button(
+                label="📊 Télécharger Excel",
+                data=excel_data,
+                file_name=f"{clean_filename(item_name)}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except:
+            st.button("📊 Excel (non disponible)", disabled=True)
+
+    with col3:
+        # Export JSON
+        json_data = data.to_json(orient='records', force_ascii=False)
+        st.download_button(
+            label="📄 Télécharger JSON",
+            data=json_data.encode('utf-8'),
+            file_name=f"{clean_filename(item_name)}.json",
+            mime="application/json"
+        )
+
+    # Aperçu des données
+    with st.expander("👁️ Aperçu des données exportées"):
+        tab1, tab2, tab3 = st.tabs(["CSV", "JSON", "Tableau"])
+
+        with tab1:
+            st.code(data.head(20).to_csv(index=False), language="csv")
+
+        with tab2:
+            st.json(json.loads(json_data)[:10])  # Premier 10 enregistrements
+
+        with tab3:
+            st.dataframe(data.head(20), use_container_width=True)
+
+
+def clean_filename(filename):
+    """Nettoie un nom de fichier"""
+    import re
+    # Remplacer les caractères spéciaux par des underscores
+    cleaned = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # Limiter la longueur
+    return cleaned[:50]
+
+def export_all_dashboard_items(dashboard):
+    """Exporte tous les éléments du dashboard"""
+    items = dashboard.get('dashboardItems', [])
+
+    if not items:
+        st.warning("Aucun élément à exporter")
         return
 
-    # Afficher tous les éléments avec leurs transformations
-    for idx, item in valid_items:
-        display_dashboard_item_with_transform(item, idx)
-        st.markdown("---")
+    # Créer un DataFrame avec les métadonnées
+    metadata = []
+    for idx, item in enumerate(items):
+        item_name = get_item_name(item, idx)
+        item_type = get_item_type(item)
 
+        metadata.append({
+            'index': idx + 1,
+            'nom': item_name,
+            'type': item_type,
+            'id': get_item_id(item),
+            'has_data': has_visualizable_data(item)
+        })
+
+    metadata_df = pd.DataFrame(metadata)
+
+    # Créer un fichier Excel avec plusieurs onglets
+    try:
+        import io
+        from pandas import ExcelWriter
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Onglet métadonnées
+            metadata_df.to_excel(writer, index=False, sheet_name='Métadonnées')
+
+            # Onglets pour les données de chaque élément
+            for idx, item in enumerate(items):
+                if has_visualizable_data(item):
+                    data, _, _ = st.session_state.client.get_item_data(item)
+                    if not data.empty:
+                        sheet_name = f"Élément_{idx + 1}"
+                        if len(sheet_name) > 31:  # Limite Excel
+                            sheet_name = sheet_name[:31]
+                        data.to_excel(writer, index=False, sheet_name=sheet_name)
+
+        excel_data = output.getvalue()
+
+        # Téléchargement
+        dashboard_name = clean_filename(dashboard.get('name', 'dashboard'))
+        st.download_button(
+            label="📥 Télécharger l'export complet",
+            data=excel_data,
+            file_name=f"{dashboard_name}_export_complet.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.success(f"Prêt à exporter {len(items)} éléments")
+
+    except Exception as e:
+        st.error(f"Erreur lors de l'export: {str(e)}")
 
 def has_visualizable_data(item):
     """Vérifie si l'élément a des données visualisables"""
